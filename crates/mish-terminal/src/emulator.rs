@@ -137,13 +137,37 @@ fn clamp_size(cols: u16, rows: u16) -> (u16, u16) {
 }
 
 impl Emulator {
-    /// Create an emulator with the given screen size.
+    /// Create an emulator with the given screen size and alacritty's default
+    /// scrollback (the live server emulator, which serves history on demand).
     pub fn new(cols: u16, rows: u16) -> Self {
+        Self::with_config(cols, rows, Config::default())
+    }
+
+    /// An emulator that retains **no** scrollback, for the diff-replay
+    /// reconstruction in [`Screen::apply_diff`](crate::screen::Screen::apply_diff).
+    /// That path only ever snapshots the *visible* grid, so history is pure
+    /// waste — and a hostile diff (a wide grid plus a flood of line feeds) would
+    /// otherwise grow the backing store up to `scrolling_history` × cols cells
+    /// (~hundreds of millions), the `screen_apply` OOM. With zero history a
+    /// scrolled-off line is dropped, bounding memory to the visible grid (which
+    /// `apply_diff` already caps at `MAX_SCREEN_CELLS`).
+    pub fn new_no_scrollback(cols: u16, rows: u16) -> Self {
+        Self::with_config(
+            cols,
+            rows,
+            Config {
+                scrolling_history: 0,
+                ..Config::default()
+            },
+        )
+    }
+
+    fn with_config(cols: u16, rows: u16, config: Config) -> Self {
         let (cols, rows) = clamp_size(cols, rows);
         let listener = TermListener::default();
         *listener.size.lock().unwrap() = (cols, rows);
         let size = TermSize::new(cols as usize, rows as usize);
-        let term = Term::new(Config::default(), &size, listener.clone());
+        let term = Term::new(config, &size, listener.clone());
         Self {
             term,
             parser: Processor::new(),
@@ -429,6 +453,28 @@ mod tests {
         emu.feed(b"x"); // still usable afterward
         emu.resize(80, 24);
         assert_eq!((emu.cols(), emu.rows()), (80, 24));
+    }
+
+    /// The diff-replay constructor must retain no scrollback, so a line-feed
+    /// flood on a wide grid can't balloon the backing store (the `screen_apply`
+    /// OOM, where the default 10 000-line history × a wide row reached hundreds
+    /// of millions of cells). The default emulator, by contrast, keeps history.
+    #[test]
+    fn no_scrollback_emulator_drops_history() {
+        let mut bounded = Emulator::new_no_scrollback(2000, 1);
+        bounded.feed(&[b'\n'; 5000]);
+        assert_eq!(
+            bounded.history_size(),
+            0,
+            "new_no_scrollback must retain no history"
+        );
+
+        let mut default = Emulator::new(2000, 1);
+        default.feed(&[b'\n'; 100]);
+        assert!(
+            default.history_size() > 0,
+            "the default emulator keeps scrollback for the history side-channel"
+        );
     }
 
     /// CSI 18 t (text-area size in cells) is answered from the current size.

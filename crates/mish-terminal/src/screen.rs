@@ -351,8 +351,10 @@ impl SyncState for Screen {
         // throwaway emulator. When dimensions are unchanged the stream is an
         // incremental frame from `self` (== the reference state we were cloned
         // from), so we first paint `self`; when resized, the stream is a full
-        // repaint and paints from blank.
-        let mut emu = crate::emulator::Emulator::new(cols, rows);
+        // repaint and paints from blank. No scrollback: we only snapshot the
+        // visible grid, and retaining history would let a hostile diff (wide grid
+        // + line-feed flood) balloon memory unbounded (the `screen_apply` OOM).
+        let mut emu = crate::emulator::Emulator::new_no_scrollback(cols, rows);
         if cols == self.cols && rows == self.rows {
             let blank = Screen::blank(cols, rows);
             emu.feed(&crate::display::new_frame(&blank, self, false));
