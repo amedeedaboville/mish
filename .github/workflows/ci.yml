@@ -26,6 +26,19 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  deny:
+    name: cargo-deny (advisories / licenses / bans / sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Supply-chain gate: fails on a RustSec advisory, a non-allowed license, an
+      # untrusted source, or a banned crate. Accepted advisories and the license
+      # allow-list live in deny.toml. The action bundles cargo-deny, so no
+      # toolchain/cache setup is needed.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   madsim:
     name: madsim deterministic simulation
     runs-on: ubuntu-latest

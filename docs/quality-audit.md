@@ -101,10 +101,16 @@ owner can trigger it (a self-DoS) — but worth clamping like `apply_diff` does.
 
 ### Test / CI infrastructure
 
-- **No supply-chain gate.** No `cargo-deny`/`cargo-audit` job or `deny.toml`, for
-  a remote-input tool pulling crypto (rustls/quinn), zlib (flate2), and VT
-  parsers — and the project already tracks one live upstream CVE (vte legacy
-  color). This is the cheapest large security win.
+- **Supply-chain gate — DONE.** Added a `cargo-deny` CI job + `deny.toml`
+  (advisories / licenses / bans / sources). It surfaced two advisories, both
+  with no available fix and consciously ignored with tracking notes in
+  `deny.toml`:
+  - `RUSTSEC-2023-0071` — RSA Marvin timing side-channel via `rsa`, pulled in
+    transitively by `russh` (builtin SSH bootstrap). No constant-time release
+    exists yet; the QUIC session is rustls (ring), unaffected.
+  - `RUSTSEC-2025-0141` — `bincode` 1.3.3 is unmaintained (development ceased;
+    maintainers consider 1.3.3 complete). It is the workspace serializer; 2.x is
+    a separate API, so not a drop-in upgrade.
 - **No mutation testing.** With ~296 tests already green under a coverage gate,
   `cargo-mutants` is the next real signal — it measures whether assertions catch
   bugs, especially in the SSP retransmit/RTT arithmetic (`mish-ssp/core.rs`).
@@ -139,7 +145,8 @@ server-side peer re-pin on migration isn't mentioned).
 1. **Close the unauthenticated QUIC handshake-flood DoS** (H1): set
    `ServerConfig::concurrent_connections(...)` + `Incoming::retry()` address
    validation.
-2. **Add a `cargo-deny` job + `deny.toml`** (advisories/licenses/bans).
+2. ~~**Add a `cargo-deny` job + `deny.toml`** (advisories/licenses/bans).~~ DONE
+   — also evaluate migrating off the unmaintained `bincode` 1.x (RUSTSEC-2025-0141).
 3. **Gate the insecure TLS helpers** behind `cfg(test)`/a non-default feature
    (H2) and make `authenticated_client_config` return `Result` (H3).
 4. **Independently cap OSC 52 clipboard size** and only re-emit on change (H4).

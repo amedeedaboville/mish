@@ -1,0 +1,60 @@
+# cargo-deny configuration — supply-chain gate run in CI (see ci.yml `deny` job).
+# Checks the dependency graph for security advisories, disallowed licenses,
+# untrusted sources, and dependency-tree hygiene.
+
+[graph]
+# Check the platforms mish actually targets, so we don't fail on advisories in
+# crates only pulled in for irrelevant targets.
+all-features = true
+
+[advisories]
+version = 2
+# RustSec advisory database (default). An open vulnerability or an unmaintained
+# crate fails the build. Add an entry here (with a tracking note) only to
+# consciously accept a specific advisory we cannot yet act on.
+ignore = [
+    # Marvin Attack: RSA timing side-channel in the `rsa` crate, pulled in
+    # transitively by `russh` (the builtin SSH bootstrap) via `ssh-key`. There is
+    # NO fixed release yet (a constant-time rewrite is upstream WIP), so there is
+    # nothing to upgrade to. Exploitation needs an attacker observing the timing
+    # of the client's RSA operations over the network during the SSH handshake;
+    # the QUIC session itself is rustls (ring), not affected. Revisit when `rsa`
+    # ships a constant-time release. https://rustsec.org/advisories/RUSTSEC-2023-0071
+    "RUSTSEC-2023-0071",
+    # bincode 1.3.3 is unmaintained: the team ceased development and consider
+    # 1.3.3 a *complete* version needing no updates (not a vulnerability). It is
+    # the workspace serializer (instruction/screen codecs). bincode 2.x is a
+    # separate, incompatible API, so this is not a drop-in upgrade. Revisit if a
+    # migration to bincode 2.x or another serializer is undertaken.
+    # https://rustsec.org/advisories/RUSTSEC-2025-0141
+    "RUSTSEC-2025-0141",
+]
+
+[licenses]
+version = 2
+# Permissive licenses plus the project's own GPL-3.0. A dependency whose license
+# is not on this list fails the build, surfacing it for a human decision.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "GPL-3.0-or-later",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions and wildcard deps are hygiene smells, not hard failures.
+multiple-versions = "warn"
+wildcards = "warn"
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io and explicitly-listed git sources are allowed.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
