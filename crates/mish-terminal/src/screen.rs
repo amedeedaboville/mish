@@ -210,7 +210,7 @@ impl Screen {
     /// A copy of this screen fitted to a different terminal size by **clipping or
     /// padding from the top-left** — used for read-only viewers of a shared
     /// session whose own terminal differs from the owner's ("owner drives, viewers
-    /// clip", `NEXT_FEATURES.md` #3). Overlapping cells are copied verbatim; any
+    /// clip"). Overlapping cells are copied verbatim; any
     /// new area is blank; the cursor is clamped into range. Screen-wide state
     /// (title, mouse/cursor/paste modes, clipboard, `echo_ack`, …) is preserved —
     /// only the grid geometry changes. This is a viewport crop, **not** a terminal
@@ -246,12 +246,17 @@ impl Screen {
 }
 
 /// Diff header (little-endian) preceding the mosh `new_frame` escape stream:
-/// `echo_ack: u64 | cols: u16 | rows: u16 | flags: u8`. Dimensions tell the
-/// receiver whether the escape stream is an incremental frame (same dims) or a
-/// full repaint (resized), echo_ack is the out-of-band prediction-validation
-/// counter, and `flags` carries state that isn't reproducible from the escape
-/// stream (bit 0: `alt_screen`).
-const DIFF_HEADER: usize = 13;
+/// `echo_ack: u64 | cols: u16 | rows: u16 | flags: u8 | bell_count: u64`.
+/// Dimensions tell the receiver whether the escape stream is an incremental
+/// frame (same dims) or a full repaint (resized), echo_ack is the out-of-band
+/// prediction-validation counter, and `flags` carries state that isn't
+/// reproducible from the escape stream (bit 0: `alt_screen`). `bell_count` is
+/// the sender's authoritative monotonic beep counter: the escape stream only
+/// carries a per-frame-*capped* run of BEL bytes (so a hostile peer can't
+/// materialize a giant beep frame — see [`crate::display::new_frame`]), so the
+/// receiver can't recover the true count by re-counting them. Carrying it
+/// out-of-band lets the synchronized screen round-trip exactly.
+const DIFF_HEADER: usize = 21;
 
 /// `flags` bit: the remote app is on the alternate screen.
 const FLAG_ALT_SCREEN: u8 = 1 << 0;
@@ -298,7 +303,14 @@ impl SyncState for Screen {
         // The diff is mosh's minimal escape stream transforming `prev` into
         // `self` (cursor moves, ECH/EL erases, SGR runs) — see `crate::display`.
         let ansi = crate::display::new_frame(prev, self, true);
-        if ansi.is_empty() && self.echo_ack == prev.echo_ack && self.alt_screen == prev.alt_screen {
+        // A bell-only change still emits at least one BEL byte (so `ansi` is
+        // non-empty), but compare `bell_count` explicitly so a non-increasing
+        // count (e.g. after an emulator reset) still produces a corrective diff.
+        if ansi.is_empty()
+            && self.echo_ack == prev.echo_ack
+            && self.alt_screen == prev.alt_screen
+            && self.bell_count == prev.bell_count
+        {
             return Vec::new();
         }
         let flags = if self.alt_screen { FLAG_ALT_SCREEN } else { 0 };
@@ -307,6 +319,7 @@ impl SyncState for Screen {
         out.extend_from_slice(&self.cols.to_le_bytes());
         out.extend_from_slice(&self.rows.to_le_bytes());
         out.push(flags);
+        out.extend_from_slice(&self.bell_count.to_le_bytes());
         out.extend_from_slice(&ansi);
         out
     }
@@ -319,6 +332,7 @@ impl SyncState for Screen {
         let cols = u16::from_le_bytes([diff[8], diff[9]]);
         let rows = u16::from_le_bytes([diff[10], diff[11]]);
         let flags = diff[12];
+        let bell_count = u64::from_le_bytes(diff[13..21].try_into().unwrap());
         let ansi = &diff[DIFF_HEADER..];
 
         // Reject degenerate or implausibly large geometries from a malformed/
@@ -349,6 +363,9 @@ impl SyncState for Screen {
         // `alt_screen` can't be reconstructed from the escape stream (the client
         // never replays 1049), so restore it from the header flags.
         next.alt_screen = flags & FLAG_ALT_SCREEN != 0;
+        // The escape stream's BEL run is capped per frame, so the replayed
+        // emulator under-counts; restore the true beep counter from the header.
+        next.bell_count = bell_count;
         *self = next;
     }
 
@@ -375,6 +392,8 @@ mod tests {
             d.extend_from_slice(&0u64.to_le_bytes()); // echo_ack
             d.extend_from_slice(&cols.to_le_bytes());
             d.extend_from_slice(&rows.to_le_bytes());
+            d.push(0); // flags
+            d.extend_from_slice(&0u64.to_le_bytes()); // bell_count
             d.push(b'\n'); // some escape-stream payload
             d
         };
@@ -401,10 +420,35 @@ mod tests {
         d.extend_from_slice(&1u16.to_le_bytes()); // cols = 1
         d.extend_from_slice(&256u16.to_le_bytes()); // rows
         d.push(0); // flags
+        d.extend_from_slice(&0u64.to_le_bytes()); // bell_count
         d.extend_from_slice(&[0xe2, 0xba, 0x80]); // wide glyph payload
         let mut s = Screen::blank(80, 24);
         s.apply_diff(&d); // must not panic
         assert_eq!((s.cols, s.rows), (80, 24));
+    }
+
+    /// Regression (the `diff_roundtrip` cargo-fuzz artifacts: runs of `\x07`):
+    /// the escape stream caps emitted BEL bytes per frame, so a screen with more
+    /// bells than the cap can't have its `bell_count` reconstructed by replaying
+    /// the stream. The header carries the authoritative count out-of-band, so the
+    /// synchronized screen must round-trip the exact `bell_count` regardless of
+    /// the per-frame BEL cap.
+    #[test]
+    fn bell_count_roundtrips_past_cap() {
+        let mut emu = crate::emulator::Emulator::new(40, 12);
+        let prev = emu.snapshot();
+        emu.feed(&[0x07; 6]); // six beeps — well past MAX_BELLS_PER_FRAME (3)
+        let cur = emu.snapshot();
+        assert_eq!(cur.bell_count, 6, "emulator counts every bell");
+
+        let diff = cur.diff_from(&prev);
+        let mut rebuilt = prev.clone();
+        rebuilt.apply_diff(&diff);
+        assert_eq!(
+            rebuilt.bell_count, cur.bell_count,
+            "bell_count must round-trip exactly despite the per-frame BEL cap"
+        );
+        assert_eq!(rebuilt, cur, "the full screen round-trips");
     }
 
     /// `resized_view` crops/pads from the top-left, preserves screen-wide state,

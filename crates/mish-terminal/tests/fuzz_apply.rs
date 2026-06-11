@@ -26,6 +26,8 @@ proptest! {
         header.extend_from_slice(&0u64.to_le_bytes()); // echo_ack
         header.extend_from_slice(&65535u16.to_le_bytes()); // cols
         header.extend_from_slice(&65535u16.to_le_bytes()); // rows
+        header.push(0); // flags
+        header.extend_from_slice(&0u64.to_le_bytes()); // bell_count
         header.extend_from_slice(&ansi);
         let mut s = Screen::blank(80, 24);
         s.apply_diff(&header); // must not try to allocate ~4 billion cells

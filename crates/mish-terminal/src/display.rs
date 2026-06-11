@@ -446,10 +446,11 @@ fn emit_modes(frame: &mut FrameState, old: &Screen, new: &Screen, initialized: b
     // log full of `\a`, arbitrary shared-session output) that can reach hundreds
     // of millions and would materialize a multi-hundred-MB frame into the client's
     // TTY (and into the throwaway buffer `Screen::apply_diff` builds on every diff).
-    // A human can't distinguish more than a couple of coalesced bells, and the
-    // count is cosmetic: the receiver re-counts BELs to track its own bell_count,
-    // which is never compared across the wire, so a capped delta round-trips
-    // harmlessly. BEL doesn't move the cursor, so emitting it here is safe.
+    // A human can't distinguish more than a couple of coalesced bells, so capping
+    // the audible run is harmless. The authoritative `bell_count` itself travels
+    // out-of-band in the diff header (see `Screen::diff_from`), so capping the
+    // emitted bytes here does not desynchronize the receiver's count. BEL doesn't
+    // move the cursor, so emitting it here is safe.
     const MAX_BELLS_PER_FRAME: u64 = 3;
     let beeps = new
         .bell_count

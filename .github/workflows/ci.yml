@@ -127,13 +127,15 @@ jobs:
       # gates regressions (a reintroduced panic surfaces within seconds — this is
       # how the screen_apply zero-dimension crash was caught). Not a substitute
       # for a long out-of-band fuzzing campaign.
-      # QUARANTINED: screen_apply and diff_roundtrip are temporarily out of the
-      # list — their checked-in regression seeds reproduce real, unfixed bugs:
-      #   * screen_apply   — apply_diff balloons past the 2 GB RSS limit (OOM);
-      #   * diff_roundtrip — SyncState diff/apply fails to reconstruct an
-      #     emulator-produced screen (control-char round-trip).
-      # Both are caught deterministically by their seeds; re-add each target here
-      # once its bug is fixed (the seeds stay checked in as the regression gate).
+      # QUARANTINED: screen_apply is still out of the list — its checked-in
+      # regression seeds reproduce a real, unfixed bug:
+      #   * screen_apply — apply_diff balloons past the 2 GB RSS limit (OOM).
+      # It is caught deterministically by its seeds; re-add it here once the OOM
+      # is fixed (the seeds stay checked in as the regression gate).
+      # diff_roundtrip was un-quarantined once the BEL round-trip bug was fixed:
+      # the authoritative bell_count now rides the diff header out-of-band
+      # (Screen::diff_from), so a screen with more bells than the per-frame BEL
+      # cap reconstructs exactly. Its seeds (bell-count-*) are the regression gate.
       - name: Fuzz targets
         # Pin the build to the GNU triple. `taiki-e/install-action` ships a
         # musl-static `cargo-fuzz`, and cargo-fuzz defaults the fuzz build to its
@@ -145,7 +147,7 @@ jobs:
         env:
           TARGET: x86_64-unknown-linux-gnu
         run: |
-          for t in instruction_decode frag_reassemble userstream_decode differential_emulator answerback_safety tty_emission_safety frag_memory_bounds client_render_safety resized_view; do
+          for t in instruction_decode frag_reassemble userstream_decode differential_emulator answerback_safety tty_emission_safety frag_memory_bounds client_render_safety resized_view diff_roundtrip; do
             # Replay checked-in regression seeds first (deterministic gate), then a
             # bounded coverage-guided run. `-runs=0` makes the replay execute the
             # corpus once and exit — without it, handing libFuzzer a directory means
